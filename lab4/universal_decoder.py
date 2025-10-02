@@ -13,7 +13,7 @@ import argparse
 from collections import Counter
 import heapq
 
-from lab4.archiver_huffman import huffman_decode
+
 
 # ==============================
 # === Общие константы формата ===
@@ -114,12 +114,18 @@ def decode_v0(archive_path: Path, outdir: Path):
       - далее байты исходного файла
     """
     with archive_path.open('rb') as f:
-        sig = f.read(6)
-        if sig != b'L3ARCH':
-            raise ValueError("v0: неверная сигнатура")
-        version = struct.unpack('<H', f.read(2))[0]
+        # пропускаем уже проверенные 8 байт
+        f.seek(8)
+        
+        # Читаем длину исходного файла
         orig_len = struct.unpack('<Q', f.read(8))[0]
+        
+        # Читаем данные
         data = f.read(orig_len)
+        
+        # Проверяем, что прочитали достаточно данных
+        if len(data) != orig_len:
+            raise ValueError(f"v0: ожидалось {orig_len} байт, получено {len(data)}")
 
     # сохраняем восстановленный файл
     outdir.mkdir(parents=True, exist_ok=True)
@@ -333,8 +339,8 @@ def universal_decode(archive_path: Path, outdir: Path):
         if head[:6] != b'L3ARCH':
             raise ValueError("Ошибка: неверная сигнатура")
         
-        f.seek(8)
-        version = struct.unpack('<H', f.read(2))[0]
+        # получаем версию из уже прочитанных байтов
+        version = struct.unpack('<H', head[6:8])[0]
 
     print(f"Сигнатура верна, версия {version}")
 

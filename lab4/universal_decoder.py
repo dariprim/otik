@@ -13,6 +13,8 @@ import argparse
 from collections import Counter
 import heapq
 
+from lab4.archiver_huffman import huffman_decode
+
 # ==============================
 # === Общие константы формата ===
 # ==============================
@@ -252,25 +254,87 @@ def decode_v2(archive_path: Path, outdir: Path):
                 o.write(raw)
             print(f"[v2] Восстановлен: {relpath}")
 
+
+    
+    
+    
+def decode_v3(archive_path: Path, outdir: Path):
+    """
+    Формат v3 (интеллектуальный кодер Л4.№4):
+    - Для каждого файла в service первый байт - код алгоритма
+    - Остальная часть service - мета-информация алгоритма
+    """
+    with archive_path.open('rb') as f:
+        sig = f.read(8)
+        if sig[:6] != b'L3ARCH':
+            raise ValueError("v3: неверная сигнатура")
+        
+        version = struct.unpack('<H', f.read(2))[0]
+        alg_ctx = f.read(1)[0]
+        alg_noctx = f.read(1)[0]  # не используется в v3
+        alg_prot = f.read(1)[0]
+        _ = f.read(1)
+        header_size = struct.unpack('<Q', f.read(8))[0]
+        num_entries = struct.unpack('<I', f.read(4))[0]
+
+        # Чтение метаданных записей
+        entries_meta = []
+        for _ in range(num_entries):
+            entry_type = f.read(1)[0]
+            path_len = struct.unpack('<H', f.read(2))[0]
+            relpath = f.read(path_len).decode('utf-8')
+            orig_size = struct.unpack('<Q', f.read(8))[0]
+            stored_size = struct.unpack('<Q', f.read(8))[0]
+            service_len = struct.unpack('<I', f.read(4))[0]
+            service = f.read(service_len) if service_len else b''
+            entries_meta.append((entry_type, relpath, orig_size, stored_size, service))
+
+        outdir.mkdir(parents=True, exist_ok=True)
+
+        # Обработка файлов
+        for entry_type, relpath, orig_size, stored_size, service in entries_meta:
+            target = outdir / Path(relpath)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            stored_bytes = f.read(stored_size) if stored_size else b''
+
+            if entry_type == 1:  # ENTRY_FILE
+                # Извлекаем код алгоритма из service
+                algorithm_code = service[0] if service else 0
+                meta_info = service[1:] if service else b''
+                
+                # Декодирование в зависимости от алгоритма
+                if algorithm_code == 0:
+                    # Без сжатия
+                    raw_data = stored_bytes
+                elif algorithm_code == 3:
+                    # Хаффман
+                    raw_data = huffman_decode(stored_bytes, meta_info, orig_size)
+                else:
+                    raise ValueError(f"Неизвестный код алгоритма: {algorithm_code}")
+                
+                # Проверка CRC если включена
+                if alg_prot == 11 and len(meta_info) >= 4:
+                    crc_val = struct.unpack('<I', meta_info[-4:])[0]
+                    actual_crc = crc32(raw_data) & 0xffffffff
+                    if actual_crc != crc_val:
+                        print(f"[v3] Ошибка CRC для {relpath}")
+
+                with target.open('wb') as o:
+                    o.write(raw_data)
+                print(f"[v3] Восстановлен: {relpath}")
+
 # ==============================
 # === Диспетчер версий ===
 # ==============================
 
 def universal_decode(archive_path: Path, outdir: Path):
-    """
-    Универсальный декодер:
-      - проверяет сигнатуру
-      - читает номер версии
-      - вызывает соответствующий декодер
-    """
     with archive_path.open('rb') as f:
         head = f.read(8)
-        if head[:6] != SIGNATURE_PREFIX:
-            raise ValueError("Ошибка: неверная сигнатура (ожидалось L3ARCH)")
-        # пробуем прочитать версию после смещения 8 (для v1 и v2)
+        if head[:6] != b'L3ARCH':
+            raise ValueError("Ошибка: неверная сигнатура")
+        
         f.seek(8)
-        ver_bytes = f.read(2)
-        version = struct.unpack('<H', ver_bytes)[0]
+        version = struct.unpack('<H', f.read(2))[0]
 
     print(f"Сигнатура верна, версия {version}")
 
@@ -280,8 +344,11 @@ def universal_decode(archive_path: Path, outdir: Path):
         decode_v1(archive_path, outdir)
     elif version == 2:
         decode_v2(archive_path, outdir)
+    elif version == 3:
+        decode_v3(archive_path, outdir)
     else:
         raise RuntimeError(f"Неизвестная версия формата: {version}")
+
 
 # ==============================
 # === CLI ===
